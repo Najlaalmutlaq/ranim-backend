@@ -716,8 +716,8 @@ async def analyze_audio(file: UploadFile = File(...)):
 
         return {
             "success": True,
+            "app_version": "v6.0.0",
             "filename": file.filename,
-            "analysis": analysis,
             "results": results,
             "notes": {
                 "best_input": "Use a clean sustained vowel like aaa for 3 to 5 seconds.",
