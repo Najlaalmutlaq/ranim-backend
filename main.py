@@ -7,6 +7,7 @@ import os
 import traceback
 import librosa
 import noisereduce as nr
+import parselmouth
 
 from scipy.signal import butter, filtfilt, correlate
 
@@ -617,7 +618,25 @@ def analyze_signal(y: np.ndarray, sr: int):
     jitter_pct = jitter_local(periods)
     shimmer_pct = shimmer_local(amplitudes)
     shimmer_db = shimmer_local_db(amplitudes)
-    hnr_db = estimate_hnr(voiced_seg_proc, sr, median_f0)
+
+    hnr_db = None
+
+    try:
+        sound_pm = parselmouth.Sound(voiced_seg_proc, sampling_frequency=sr)
+
+        harmonicity = parselmouth.praat.call(
+            sound_pm,
+            "To Harmonicity (cc)",
+            0.01,
+            75,
+            0.1,
+            1.0
+        )
+
+        hnr_db = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
+
+    except Exception:
+        hnr_db = None
 
     voiced_duration = safe_float(len(voiced_seg_proc) / sr)
     fraction_unvoiced = None
