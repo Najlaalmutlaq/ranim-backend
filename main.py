@@ -615,15 +615,99 @@ def analyze_signal(y: np.ndarray, sr: int):
         f0_median=median_f0
     )
 
-    jitter_pct = jitter_local(periods)
-    shimmer_pct = shimmer_local(amplitudes)
-    shimmer_db = shimmer_local_db(amplitudes)
 
+
+    def analyze_signal(y: np.ndarray, sr: int):
+        duration = estimate_duration(y, sr)
+
+    raw_dbfs = estimate_relative_dbfs(y)
+    raw_intensity = estimate_intensity_mean_abs(y)
+
+    y_raw = remove_dc(y)
+    y_clean = clean_audio(y_raw, sr)
+
+    clean_dbfs = estimate_relative_dbfs(y_clean)
+    clean_intensity = estimate_intensity_mean_abs(y_clean)
+
+    voiced_seg_proc, seg_start, seg_end = find_longest_voiced_segment(y_clean, sr)
+    voiced_seg_raw = y_raw[seg_start:seg_end]
+
+    voiced_intensity = estimate_intensity_mean_abs(voiced_seg_proc)
+
+    f0s = estimate_f0_contour(voiced_seg_proc, sr, fmin=75.0, fmax=500.0)
+
+    if len(f0s) == 0:
+        mean_f0 = None
+        median_f0 = None
+        std_f0 = None
+        min_f0 = None
+        max_f0 = None
+    else:
+        mean_f0 = safe_float(np.mean(f0s))
+        median_f0 = safe_float(np.median(f0s))
+        std_f0 = safe_float(np.std(f0s))
+        min_f0 = safe_float(np.min(f0s))
+        max_f0 = safe_float(np.max(f0s))
+
+    periods, amplitudes = extract_periods_and_amplitudes(
+        y_raw=voiced_seg_raw,
+        y_proc=voiced_seg_proc,
+        sr=sr,
+        f0_median=median_f0
+    )
+
+
+        # Jitter / Shimmer / HNR using the same Praat-style method
+    jitter_pct = None
+    shimmer_pct = None
+    shimmer_db = None
     hnr_db = None
 
     try:
         sound_pm = parselmouth.Sound(voiced_seg_proc, sampling_frequency=sr)
 
+        point_process = parselmouth.praat.call(
+            sound_pm,
+            "To PointProcess (periodic, cc)",
+            75,
+            300
+        )
+
+        jitter_pct = parselmouth.praat.call(
+            point_process,
+            "Get jitter (local)",
+            0, 0, 0.0001, 0.02, 1.3
+        )
+
+        shimmer_pct = parselmouth.praat.call(
+            [sound_pm, point_process],
+            "Get shimmer (local)",
+            0, 0, 0.0001, 0.02, 1.3, 1.6
+        )
+
+        shimmer_db = parselmouth.praat.call(
+            [sound_pm, point_process],
+            "Get shimmer (local_dB)",
+            0, 0, 0.0001, 0.02, 1.3, 1.6
+        )
+
+        harmonicity = parselmouth.praat.call(
+            sound_pm,
+            "To Harmonicity (cc)",
+            0.01, 75, 0.1, 1.0
+        )
+        hnr_db = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
+
+    except Exception as e:
+        print("PRAAT SOURCE ERROR:", repr(e), flush=True)
+        jitter_pct = None
+        shimmer_pct = None
+        shimmer_db = None
+        hnr_db = None
+    
+    hnr_db = None
+    try:
+        sound_pm = parselmouth.Sound(voiced_seg_proc, sampling_frequency=sr)
         harmonicity = parselmouth.praat.call(
             sound_pm,
             "To Harmonicity (cc)",
@@ -632,11 +716,47 @@ def analyze_signal(y: np.ndarray, sr: int):
             0.1,
             1.0
         )
-
         hnr_db = parselmouth.praat.call(harmonicity, "Get mean", 0, 0)
-
-    except Exception:
+    except Exception as e:
+        print("HNR ERROR:", e, flush=True)
         hnr_db = None
+
+    voiced_duration = safe_float(len(voiced_seg_proc) / sr)
+    fraction_unvoiced = None
+    if duration and voiced_duration is not None and duration > 0:
+        fraction_unvoiced = safe_float(max(0.0, 1.0 - (voiced_duration / duration)))
+
+    rms = estimate_rms(y_raw)
+
+    analysis = {
+        "sample_rate": sr,
+        "duration_seconds": duration,
+        "voiced_segment_seconds": voiced_duration,
+
+        "raw_relative_dbfs": raw_dbfs,
+        "cleaned_relative_dbfs": clean_dbfs,
+
+        "raw_intensity_mean_abs": raw_intensity,
+        "cleaned_intensity_mean_abs": clean_intensity,
+        "voiced_intensity_mean_abs": voiced_intensity,
+
+        "mean_f0_hz": mean_f0,
+        "median_f0_hz": median_f0,
+        "std_f0_hz": std_f0,
+        "min_f0_hz": min_f0,
+        "max_f0_hz": max_f0,
+
+        "jitter_local_pct": jitter_pct * 100,
+        "shimmer_local_pct": shimmer_pct * 100,
+        "shimmer_local_db": shimmer_db,
+        "hnr_db": hnr_db,
+
+        "rms": rms,
+        "fraction_unvoiced_frames_estimate": fraction_unvoiced,
+    }
+
+    return analysis
+    
 
     voiced_duration = safe_float(len(voiced_seg_proc) / sr)
     fraction_unvoiced = None
