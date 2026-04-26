@@ -7,3 +7,4 @@ soundfile
 noisereduce
 librosa
 praat-parselmouth
+
