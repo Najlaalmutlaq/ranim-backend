@@ -135,9 +135,13 @@ def home():
     return HTML_PAGE
 
 
+
+
 # =========================================================
 # HELPERS
 # =========================================================
+
+
 
 def safe_float(value):
     try:
@@ -147,12 +151,9 @@ def safe_float(value):
         return None
 
 
+
 def load_audio(file_path: str, target_sr: int = 44100):
-    """
-    Load audio at 44100 Hz.
-    Fallback for m4a / unusual formats.
-    Normalise quiet recordings (peak < 0.1).
-    """
+   
     try:
         y, sr = librosa.load(file_path, sr=target_sr, mono=True)
     except Exception:
@@ -170,6 +171,7 @@ def load_audio(file_path: str, target_sr: int = 44100):
 
     y    = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
     peak = float(np.max(np.abs(y)))
+
 
     if peak <= 1e-12:
         raise ValueError("Audio is silent")
@@ -343,24 +345,7 @@ def estimate_f0_contour(y: np.ndarray, sr: int,
 # =========================================================
 
 def find_glottal_periods(y: np.ndarray, sr: int, f0_median: float):
-    """
-    Windowed Autocorrelation GCI detection.
-    Mimics Praat's PointProcess (periodic, cc).
-
-    FIX v9.1 — Two key improvements:
-      1. Tight search window ±20% around expected F0 lag
-         (was ±30–40%) to avoid capturing subharmonics and
-         octave errors that inflate Jitter dramatically.
-      2. Post-detection period filtering: keep only periods
-         within ±20% of the expected period (1/F0), then
-         apply max_factor. This ensures clean periods even
-         for voices with high shimmer or instability.
-
-    Window size stays at 2× period — diagnostic tests showed
-    this gives the lowest Jitter error across all F0 ranges.
-
-    Reference: Boersma (1993).
-    """
+    
     if f0_median is None or f0_median <= 0:
         return []
 
@@ -402,7 +387,7 @@ def find_glottal_periods(y: np.ndarray, sr: int, f0_median: float):
         if 0 < peak_lag < len(ac)-1:
             a, b, g = ac[peak_lag-1], ac[peak_lag], ac[peak_lag+1]
             d = a - 2*b + g
-            refined = peak_lag - 0.5*(g-a)/d if abs(d) > 1e-12 else float(peak_lag)
+            refined = peak_lag - 0.5*(g-a)/d if abs(d) > 1e-12 else float(peak_lag) #
         else:
             refined = float(peak_lag)
 
@@ -426,15 +411,11 @@ def find_glottal_periods(y: np.ndarray, sr: int, f0_median: float):
 
 def extract_cycle_amplitudes_rms(y: np.ndarray, sr: int,
                                   pulse_data: list, f0_median: float):
-    """
-    RMS amplitude per glottal cycle.
-    Praat uses RMS (not Peak-to-Peak) for Shimmer.
-    Reference: Titze (1994).
-    """
+    
     if len(pulse_data) < 2 or f0_median <= 0:
         return np.array([])
 
-    hp   = int((sr / f0_median) / 2)
+    hp   = int((sr / f0_median) / 2) # نصف طول الدوره الصوتيه 
     amps = []
 
     for i in range(len(pulse_data)-1):
@@ -460,33 +441,15 @@ def compute_jitter_hybrid(pulse_data: list,
                            sr: int,
                            min_period=0.0001, max_period=0.02,
                            max_factor=1.3):
-    """
-    Hybrid Jitter — closest to Praat without Parselmouth.
-
-    Strategy:
-      1. GCI autocorrelation gives pulse timestamps
-      2. pYIN F0 (unsmoothed) gives period per frame
-      3. We use GCI periods (refined_lag/sr) as primary source
-         but SCALE them so their mean matches pYIN mean period.
-         This corrects the systematic bias in GCI period estimation
-         while preserving the cycle-to-cycle variation pattern.
-
-    Formula (Boersma 1993):
-        Jitter = mean|T_i - T_{i-1}| / mean(T_i)
-
-    References:
-    Boersma, P. (1993). Accurate short-term analysis.
-    Titze, I.R. (1994). Principles of Voice Production.
-    """
-    # ── Primary: GCI periods ──────────────────────────────
+    
+    
+    # ── GCI periods ──────────────────────────────
     if len(pulse_data) >= 3:
         gci_periods = np.array([ps for _, ps in pulse_data])
         valid = (gci_periods >= min_period) & (gci_periods <= max_period)
         gci_periods = gci_periods[valid]
 
         if len(gci_periods) >= 3:
-            # FIX v9.1: narrow periods to ±20% of pYIN expected period
-            # This removes subharmonic/octave errors before max_factor runs
             if f0_contour_raw is not None and len(f0_contour_raw) > 3:
                 expected_p = float(np.median(
                     1.0 / f0_contour_raw[f0_contour_raw > 0]))
@@ -566,16 +529,17 @@ def compute_jitter_hybrid(pulse_data: list,
 
 
 # =========================================================
-# SHIMMER — Praat-equivalent formula
+# SHIMMER 
 # =========================================================
 
 def compute_shimmer_local(amplitudes: np.ndarray, max_factor=1.6):
+   
     """
     Shimmer (local) = mean|ΔA| / mean A
     Shimmer (dB)    = mean|20·log10(A_{i+1}/A_i)|
 
-    Titze (1994): max_factor = 1.6
     """
+
     if len(amplitudes) < 3:
         return None, None
 
@@ -604,35 +568,13 @@ def compute_shimmer_local(amplitudes: np.ndarray, max_factor=1.6):
 
 
 # =========================================================
-# HNR — Cross-Correlation with Window Correction (Praat cc)
+# HNR — Cross-Correlation with Window Correction
 # =========================================================
 
 def compute_hnr_cc(y: np.ndarray, sr: int, f0_median: float,
                    time_step=0.01, silence_threshold=0.1,
                    periods_per_window=4.5):
-    """
-    HNR via Cross-Correlation with Window Autocorrelation Correction.
-
-    This replicates Praat's "To Harmonicity (cc)" more accurately
-    than simple autocorrelation by correcting for the Hanning window
-    effect — the key difference from earlier versions.
-
-    Algorithm:
-      1. Hanning-windowed frames (4.5 periods)
-      2. AC of signal   → ac_signal
-      3. AC of window   → ac_window
-      4. r_corrected    = ac_signal / (ac_window · ac_signal[0]/ac_window[0])
-         This removes the window's distortion of the peak shape.
-      5. Find peak near F0 lag (±40%)
-      6. Parabolic interpolation refines r
-      7. HNR_frame = 10·log10(r / (1−r))
-      8. Final HNR  = MEDIAN across voiced frames
-
-    Reference:
-    Boersma, P. (1993). Accurate short-term analysis of the fundamental
-    frequency and the harmonics-to-noise ratio of a sampled sound.
-    Proceedings of the Institute of Phonetic Sciences, 17, 97–110.
-    """
+    
     if f0_median is None or f0_median <= 0 or len(y) < 512:
         return None
 
@@ -711,20 +653,22 @@ def compute_hnr_cc(y: np.ndarray, sr: int, f0_median: float,
 # =========================================================
 
 def analyze_signal(y: np.ndarray, sr: int):
-    """
-    Full acoustic analysis pipeline — v9.0
 
+    
+    """
      1.  Duration + raw intensity
      2.  DC removal → bandpass → gentle NR → soft limit
-     3.  Longest voiced segment (gap-fill)
+     3.  Longest voiced segment 
      4.  pYIN F0 (outlier-filtered)  → statistics
      5.  pYIN F0 (raw, no filter)    → Jitter input
      6.  GCI via windowed AC (thr 0.2)
      7.  RMS amplitudes per cycle
-     8.  Jitter HYBRID (GCI + pYIN scale correction)   — Boersma 1993
-     9.  Shimmer (local / dB)                           — Titze 1994
-    10.  HNR  cross-correlation + window correction     — Boersma 1993
+     8.  Jitter HYBRID (GCI + pYIN scale correction)  
+     9.  Shimmer (local / dB)                           
+    10.  HNR  cross-correlation + window correction     
     11.  Result dict
+
+
     """
     duration   = estimate_duration(y, sr)
     raw_dbfs   = estimate_dbfs(y)
